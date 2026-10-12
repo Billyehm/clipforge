@@ -1,0 +1,9 @@
+pydantic>=2
+numpy
+opencv-python-headless
+mediapipe
+fastapi
+uvicorn[standard]
+pydantic-settings
+python-multipart
+groq
