@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from app.core.config import settings, work_dir
 from app.pipeline import Candidate, ClipRecord, StageCache
+from app.services.media import trim_to_size
 from app.services.pipeline import (
     STAGE_NAMES,
     read_progress,
@@ -70,36 +71,64 @@ async def upload_video(file: UploadFile = File(...)) -> dict:
     vdir = video_dir(video_id)
     vdir.mkdir(parents=True, exist_ok=True)
     dest = vdir / f"source.{ext}"
+    tmp = vdir / f"upload.{ext}"
 
     max_bytes = settings.MAX_UPLOAD_MB * 1024 * 1024
+    stream_cap = settings.STREAM_CAP_MB * 1024 * 1024
     size = 0
     try:
-        with open(dest, "wb") as out:
+        with open(tmp, "wb") as out:
             while True:
                 chunk = await file.read(1024 * 1024)
                 if not chunk:
                     break
                 size += len(chunk)
-                if size > max_bytes:
+                if size > stream_cap:
                     raise HTTPException(
-                        413, f"File exceeds the {settings.MAX_UPLOAD_MB} MB upload limit."
+                        413,
+                        f"File exceeds the {settings.STREAM_CAP_MB} MB safety cap. "
+                        "Please trim it before uploading.",
                     )
                 out.write(chunk)
     except HTTPException:
-        dest.unlink(missing_ok=True)
+        tmp.unlink(missing_ok=True)
         raise
     finally:
         await file.close()
 
+    trimmed = False
+    original_mb = round(size / (1024 * 1024), 1)
+    if size > max_bytes:
+        # Keep only the first part of the video, up to TRIM_MB megabytes.
+        try:
+            trim_to_size(tmp, dest, settings.TRIM_MB)
+            trimmed = True
+        except RuntimeError as e:
+            tmp.unlink(missing_ok=True)
+            raise HTTPException(422, f"Could not trim oversized upload: {e}")
+        tmp.unlink(missing_ok=True)
+    else:
+        tmp.rename(dest)
+
+    final_mb = round(dest.stat().st_size / (1024 * 1024), 1)
     ingest = {
         "video_id": video_id,
         "filename": file.filename,
         "duration": _probe_duration(dest),
         "status": "uploaded",
+        "trimmed": trimmed,
+        "original_size_mb": original_mb,
+        "size_mb": final_mb,
     }
     stage_cache(video_id).save("ingest", ingest)
     set_progress(video_id, "idle", 0, 0)
-    return {"video_id": video_id, "filename": file.filename}
+    response: dict = {"video_id": video_id, "filename": file.filename, "trimmed": trimmed}
+    if trimmed:
+        response["note"] = (
+            f"Your video was {original_mb} MB, over the {settings.MAX_UPLOAD_MB} MB limit, "
+            f"so only the first {final_mb} MB will be processed."
+        )
+    return response
 
 
 @router.get("/videos/{video_id}")

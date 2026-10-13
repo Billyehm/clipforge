@@ -10,6 +10,11 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
     WORK_DIR: str = "work"
     MAX_UPLOAD_MB: int = 500
+    # Oversized uploads are trimmed to this size (first part of the video).
+    TRIM_MB: int = 499
+    # Hard cap on the incoming upload stream, as a safety net so one giant
+    # upload cannot fill the disk before trimming happens.
+    STREAM_CAP_MB: int = 2048
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

@@ -3,6 +3,8 @@
 export interface VideoUploadResponse {
   video_id: string
   filename: string
+  trimmed: boolean
+  note?: string
 }
 
 export interface VideoInfo {

@@ -94,7 +94,10 @@ API on :8000, web UI on :5173.
 
 ## API overview
 
-- `POST /api/videos` - upload a video file, returns a video id
+- `POST /api/videos` - upload a video file, returns a video id. Files over
+  `MAX_UPLOAD_MB` (default 500) are not rejected: only the first `TRIM_MB`
+  (default 499) megabytes are kept, and the response flags `trimmed: true`
+  with a note shown in the dashboard.
 - `POST /api/videos/{id}/process?n=8` - run the pipeline in the background
 - `GET /api/videos/{id}/progress` - poll for stage progress
 - `GET /api/videos/{id}/clips` - ranked clips with scores, titles, hashtags

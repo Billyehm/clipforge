@@ -42,6 +42,7 @@ function scoreClass(score: number): string {
 export default function App() {
   const [view, setView] = useState<View>('upload')
   const [videoId, setVideoId] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
 
   return (
     <div className="app">
@@ -54,6 +55,7 @@ export default function App() {
             className="btn ghost"
             onClick={() => {
               setVideoId(null)
+              setNotice(null)
               setView('upload')
             }}
           >
@@ -65,18 +67,22 @@ export default function App() {
       <main>
         {view === 'upload' && (
           <UploadView
-            onUploaded={(id) => {
+            onUploaded={(id, note) => {
               setVideoId(id)
+              setNotice(note)
               setView('processing')
             }}
           />
         )}
         {view === 'processing' && videoId && (
-          <ProcessingView
-            videoId={videoId}
-            onDone={() => setView('clips')}
-            onError={() => setView('upload')}
-          />
+          <>
+            {notice && <p className="notice">{notice}</p>}
+            <ProcessingView
+              videoId={videoId}
+              onDone={() => setView('clips')}
+              onError={() => setView('upload')}
+            />
+          </>
         )}
         {view === 'clips' && videoId && <ClipsView videoId={videoId} />}
       </main>
@@ -84,7 +90,11 @@ export default function App() {
   )
 }
 
-function UploadView({ onUploaded }: { onUploaded: (id: string) => void }) {
+function UploadView({
+  onUploaded,
+}: {
+  onUploaded: (id: string, note: string | null) => void
+}) {
   const [dragging, setDragging] = useState(false)
   const [progress, setProgress] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -96,7 +106,7 @@ function UploadView({ onUploaded }: { onUploaded: (id: string) => void }) {
       setProgress(0)
       try {
         const res = await uploadVideo(file, setProgress)
-        onUploaded(res.video_id)
+        onUploaded(res.video_id, res.note ?? null)
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Upload failed')
         setProgress(null)
