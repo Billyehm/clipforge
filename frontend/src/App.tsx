@@ -194,10 +194,12 @@ function ProcessingView({
       if (!cancelled)
         setError(e instanceof Error ? e.message : 'Could not start processing')
     })
+    let pollFailures = 0
     const timer = setInterval(async () => {
       try {
         const p = await getProgress(videoId)
         if (cancelled) return
+        pollFailures = 0
         setProgress(p)
         if (p.error) {
           setError(p.error)
@@ -211,9 +213,14 @@ function ProcessingView({
           onDone()
         }
       } catch (e) {
-        if (!cancelled)
+        // A single failed poll is usually a network blip. Only give up
+        // after several in a row so a shaky connection cannot kill a run.
+        pollFailures += 1
+        if (cancelled) return
+        if (pollFailures >= 5) {
           setError(e instanceof Error ? e.message : 'Lost contact with server')
-        clearInterval(timer)
+          clearInterval(timer)
+        }
       }
     }, 2000)
     return () => {

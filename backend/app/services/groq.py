@@ -9,6 +9,8 @@ import json
 import re
 import subprocess
 import tempfile
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from app.core.config import settings
@@ -17,9 +19,10 @@ from app.pipeline import Candidate, Segment, Transcript, Word, pick_top
 WHISPER_MODEL = "whisper-large-v3-turbo"
 RANK_MODEL = "llama-3.3-70b-versatile"
 
-# 10 minutes of 16 kHz mono 16-bit audio is about 19 MB, safely under the
-# 25 MB per-request limit of the Groq transcription API.
-CHUNK_SECONDS = 600
+# 5 minutes of 16 kHz mono 16-bit audio is about 9.6 MB, safely under the
+# 25 MB per-request limit of the Groq transcription API, and small enough
+# that each request finishes well inside HTTP timeouts on slow connections.
+CHUNK_SECONDS = 300
 PROMPT_CHUNK_CHARS = 6000
 PROMPT_OVERLAP_CHARS = 600
 
@@ -42,7 +45,10 @@ def _require_key() -> str:
 def _client():  # type: ignore[no-untyped-def]
     from groq import Groq
 
-    return Groq(api_key=_require_key())
+    # Generous timeout plus retries: a single chunk request involves
+    # uploading several MB and waiting for transcription, which can take
+    # minutes on a slow connection.
+    return Groq(api_key=_require_key(), timeout=900.0, max_retries=3)
 
 
 def _probe_duration(path: Path) -> float:
@@ -150,23 +156,47 @@ def _map_transcript(
     return Transcript(video_id=video_id, duration=duration, segments=segments)
 
 
-def transcribe(audio_path: Path, video_id: str) -> Transcript:
+def transcribe(
+    audio_path: Path,
+    video_id: str,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> Transcript:
     """Transcribe a video file with Groq Whisper.
 
-    The audio is extracted to 16 kHz wav first, then sent in 10 minute
-    chunks so long videos stay under the API size limit. Returns a
-    Transcript with segment and word level timestamps.
+    The audio is extracted to 16 kHz wav first, then sent in 5 minute
+    chunks so long videos stay under the API size limit and each request
+    stays well inside HTTP timeouts. Chunks are transcribed in parallel.
+    Returns a Transcript with segment and word level timestamps.
     """
-    client = _client()
+    workers = max(1, settings.TRANSCRIBE_WORKERS)
     with tempfile.TemporaryDirectory(prefix="clipforge_") as tmp:
         tmpdir = Path(tmp)
         wav = extract_audio_wav(Path(audio_path), tmpdir)
         duration = _probe_duration(Path(audio_path))
         parts = _split_wav(wav, tmpdir)
-        chunks: list[tuple[dict, float]] = []
-        for part_path, offset in parts:
-            chunks.append((_transcribe_chunk(client, part_path), offset))
+        total = len(parts)
+        # Each worker builds its own client; the SDK client is cheapest
+        # treated as single-threaded, and this avoids any sharing issues.
+        ordered: list[tuple[dict, float] | None] = [None] * total
+        with ThreadPoolExecutor(max_workers=min(workers, total)) as pool:
+            future_to_index = {
+                pool.submit(_transcribe_chunk_threadsafe, part_path): i
+                for i, (part_path, _offset) in enumerate(parts)
+            }
+            done = 0
+            for future in as_completed(future_to_index):
+                i = future_to_index[future]
+                ordered[i] = (future.result(), parts[i][1])
+                done += 1
+                if on_progress:
+                    on_progress(done, total)
+    chunks = [c for c in ordered if c is not None]
     return _map_transcript(chunks, video_id, duration)
+
+
+def _transcribe_chunk_threadsafe(wav_path: Path) -> dict:
+    """Transcribe one chunk with a fresh client (safe for worker threads)."""
+    return _transcribe_chunk(_client(), wav_path)
 
 
 def _segments_to_text(segments: list[Segment]) -> str:

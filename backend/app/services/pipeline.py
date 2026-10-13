@@ -129,7 +129,11 @@ def run_pipeline(video_id: str, n: int = 8, fresh: bool = False) -> None:
             transcript = Transcript.model_validate(data)
         else:
             source = _find_source(vdir)
-            transcript = transcribe(source, video_id)
+
+            def _on_chunk(done: int, total: int) -> None:
+                set_progress(video_id, "transcribe", done, total)
+
+            transcript = transcribe(source, video_id, on_progress=_on_chunk)
             cache.save("transcript", transcript.model_dump())
         set_progress(video_id, "transcribe", 1, 1)
 

@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     # Hard cap on the incoming upload stream, as a safety net so one giant
     # upload cannot fill the disk before trimming happens.
     STREAM_CAP_MB: int = 2048
+    # How many transcription chunks are sent to Groq in parallel.
+    TRANSCRIBE_WORKERS: int = 3
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
