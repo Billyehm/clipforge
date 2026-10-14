@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     STREAM_CAP_MB: int = 2048
     # How many transcription chunks are sent to Groq in parallel.
     TRANSCRIBE_WORKERS: int = 3
+    # Caption entrance effect: none, pop, bounce, spin, fade.
+    CAPTION_EFFECT: str = "pop"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

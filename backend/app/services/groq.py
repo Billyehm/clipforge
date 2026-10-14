@@ -126,27 +126,67 @@ def _map_transcript(
 ) -> Transcript:
     segments: list[Segment] = []
     for data, offset in chunks:
+        # Groq's verbose_json puts word timestamps at the TOP LEVEL of each
+        # chunk response ("words"), not inside each segment. Normalize them
+        # to (start, end, text) triples in chunk-relative time first.
+        top_words: list[tuple[float, float, str]] = []
+        for w in data.get("words") or []:
+            text = str(w.get("word", "") or w.get("text", "")).strip()
+            if not text:
+                continue
+            top_words.append(
+                (float(w.get("start", 0.0)), float(w.get("end", 0.0)), text)
+            )
+
+        seg_list: list[tuple[dict, float, float, str]] = []
         for seg in data.get("segments", []):
-            words: list[Word] = []
-            for w in seg.get("words") or []:
-                text = str(w.get("word", "") or w.get("text", "")).strip()
-                if not text:
-                    continue
-                words.append(
-                    Word(
-                        text=text,
-                        start=float(w.get("start", 0.0)) + offset,
-                        end=float(w.get("end", 0.0)) + offset,
-                    )
-                )
             text = str(seg.get("text", "")).strip()
             if not text:
                 continue
+            seg_list.append(
+                (seg, float(seg.get("start", 0.0)), float(seg.get("end", 0.0)), text)
+            )
+
+        # Assign each top-level word to the segment containing its midpoint.
+        # Words that fall just outside every boundary go to the nearest
+        # segment so none are silently dropped.
+        assigned: list[list[Word]] = [[] for _ in seg_list]
+        for ws, we, wtext in top_words:
+            mid = (ws + we) / 2.0
+            best: int | None = None
+            for i, (_seg, s, e, _text) in enumerate(seg_list):
+                if s - 0.05 <= mid <= e + 0.05:
+                    best = i
+                    break
+            if best is None and seg_list:
+                best = min(
+                    range(len(seg_list)),
+                    key=lambda i: abs((seg_list[i][1] + seg_list[i][2]) / 2.0 - mid),
+                )
+            if best is not None:
+                assigned[best].append(
+                    Word(text=wtext, start=ws + offset, end=we + offset)
+                )
+
+        for i, (seg, s, e, text) in enumerate(seg_list):
+            words = assigned[i]
+            if not words:
+                # Fallback: some providers embed words per segment.
+                for w in seg.get("words") or []:
+                    wtext = str(w.get("word", "") or w.get("text", "")).strip()
+                    if wtext:
+                        words.append(
+                            Word(
+                                text=wtext,
+                                start=float(w.get("start", 0.0)) + offset,
+                                end=float(w.get("end", 0.0)) + offset,
+                            )
+                        )
             segments.append(
                 Segment(
                     id=len(segments),
-                    start=float(seg.get("start", 0.0)) + offset,
-                    end=float(seg.get("end", 0.0)) + offset,
+                    start=s + offset,
+                    end=e + offset,
                     text=text,
                     words=words,
                 )
