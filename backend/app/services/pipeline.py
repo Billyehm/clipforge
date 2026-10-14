@@ -115,6 +115,30 @@ def _heuristic_candidates(transcript: Transcript, n: int) -> list[Candidate]:
         return _naive_candidates(transcript, n)
 
 
+def _edl_entry(clip: ClipRecord) -> dict:
+    """One edit-decision-list entry describing exactly how a clip was made."""
+    c = clip.candidate
+    return {
+        "clip_id": clip.id,
+        "title": c.title,
+        "description": c.description,
+        "genre": c.genre,
+        "hook_line": c.hook_line,
+        "score": c.score,
+        "source_start": round(c.start, 2),
+        "source_end": round(c.end, 2),
+        "duration": round(c.end - c.start, 2),
+        "output": clip.output_path,
+        "captions_ass": clip.caption_path,
+        "captions_srt": clip.srt_path,
+        "hashtags": c.hashtags,
+        "thumbnail_concept": c.thumbnail_concept,
+        "render": clip.render_info,
+        "status": clip.status,
+        "error": clip.error,
+    }
+
+
 def run_pipeline(video_id: str, n: int = 8, fresh: bool = False) -> None:
     """Run the full pipeline in a background task. Never raises to the caller."""
     vdir = video_dir(video_id)
@@ -175,6 +199,9 @@ def run_pipeline(video_id: str, n: int = 8, fresh: bool = False) -> None:
             clips[i] = clip
             cache.save("clips", [c.model_dump() for c in clips])
         set_progress(video_id, "render", total, total)
+
+        # Stage 6: edit decision list, one entry per clip.
+        cache.save("edl", [_edl_entry(c) for c in clips])
 
         set_progress(video_id, "done", total, total)
     except Exception as exc:

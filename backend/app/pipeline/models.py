@@ -39,6 +39,9 @@ class Candidate(BaseModel):
     title: str
     hashtags: list[str] = []
     speaker: str | None = None
+    genre: str = ""
+    description: str = ""
+    thumbnail_concept: str = ""
 
 
 class ClipRecord(BaseModel):
@@ -48,4 +51,6 @@ class ClipRecord(BaseModel):
     status: str = "pending"
     output_path: str | None = None
     caption_path: str | None = None
+    srt_path: str | None = None
+    render_info: dict = {}
     error: str | None = None

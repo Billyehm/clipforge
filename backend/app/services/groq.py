@@ -15,6 +15,7 @@ from pathlib import Path
 
 from app.core.config import settings
 from app.pipeline import Candidate, Segment, Transcript, Word, pick_top
+from app.pipeline.profiles import detect_genre, get_profile
 
 WHISPER_MODEL = "whisper-large-v3-turbo"
 RANK_MODEL = "llama-3.3-70b-versatile"
@@ -274,9 +275,12 @@ _SYSTEM_PROMPT = (
     "lines. Return ONLY a JSON object of the form "
     '{"candidates": [{"start": 12.5, "end": 48.0, "score": 87, '
     '"hook_line": "...", "reason": "...", "title": "...", '
-    '"hashtags": ["#tag1", "#tag2"]}]}. '
+    '"hashtags": ["#tag1", "#tag2"], "description": "...", '
+    '"thumbnail_concept": "..."}]}. '
     "Scores are 0 to 100. start and end are seconds. hook_line is the exact "
-    "opening line of the clip. Keep titles under 60 characters."
+    "opening line of the clip. Keep titles under 60 characters. description "
+    "is one or two sentences for the upload caption. thumbnail_concept is a "
+    "short visual description of an ideal thumbnail."
 )
 
 
@@ -312,16 +316,27 @@ def _rank_chunk(
     segments: list[Segment],
     heuristic: list[Candidate],
     duration: float,
+    genre: str = "",
+    profile: dict | None = None,
 ) -> list[Candidate]:
     chunk_text = _segments_to_text(segments)
     heur_text = "\n".join(
         f"- [{c.start:.1f}-{c.end:.1f}] score={c.score:.0f}: {c.title or c.hook_line}"
         for c in heuristic
     )
+    genre_block = ""
+    if profile:
+        genre_block = (
+            f"\nEditing profile ({profile['label']}): {profile['selection']}\n"
+        )
     user_prompt = (
         f"Transcript chunk (timestamps in seconds):\n{chunk_text}\n\n"
-        f"Heuristic candidates in this range:\n{heur_text or '(none)'}\n\n"
-        "Rank the best moments. Return the JSON object now."
+        f"Heuristic candidates in this range:\n{heur_text or '(none)'}\n"
+        f"{genre_block}\n"
+        "Rank the best moments. For each candidate also write a one or two "
+        "sentence description and a thumbnail_concept (a short visual "
+        "description of an ideal thumbnail, e.g. what the speaker is doing "
+        "plus 3-5 words of thumbnail text). Return the JSON object now."
     )
     last_error: Exception | None = None
     items: list[dict] = []
@@ -366,6 +381,9 @@ def _rank_chunk(
                 reason=str(item.get("reason", "") or "")[:300],
                 title=str(item.get("title", "") or "")[:80],
                 hashtags=[str(h) for h in hashtags][:8],
+                genre=genre,
+                description=str(item.get("description", "") or "")[:400],
+                thumbnail_concept=str(item.get("thumbnail_concept", "") or "")[:200],
             )
         )
     return out
@@ -390,6 +408,8 @@ def rank_candidates(
     """
     client = _client()
     duration = transcript.duration
+    genre = detect_genre(transcript)
+    profile = get_profile(genre)
     ranked: list[Candidate] = []
     chunks = _chunk_segments(transcript.segments)
     for chunk in chunks:
@@ -398,7 +418,7 @@ def rank_candidates(
         lo, hi = chunk[0].start, chunk[-1].end
         heur = [c for c in heuristic_candidates if c.end >= lo and c.start <= hi]
         try:
-            ranked.extend(_rank_chunk(client, chunk, heur, duration))
+            ranked.extend(_rank_chunk(client, chunk, heur, duration, genre, profile))
         except GroqError:
             ranked.extend(heur)
 
@@ -423,6 +443,10 @@ def rank_candidates(
     for h in sorted(heuristic_candidates, key=lambda c: c.score, reverse=True):
         if all(_overlap(h.start, h.end, m) < 0.5 for m in merged):
             merged.append(h)
+
+    for c in merged:
+        if not c.genre:
+            c.genre = genre
 
     final = pick_top(merged, n=len(merged))
     final.sort(key=lambda c: c.score, reverse=True)

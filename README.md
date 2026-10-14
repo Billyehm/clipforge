@@ -105,6 +105,25 @@ API on :8000, web UI on :5173.
   and re-render one clip
 - `GET /api/videos/{id}/download/{clip_id}` - download the finished mp4
 
+## Genre editing profiles
+
+Clipforge detects the video's genre from the transcript (podcast,
+tech, business, gaming, education, anime, motivational, news) and
+edits each clip to that genre's brief:
+
+- The moment picker follows genre-specific selection rules and also
+  writes a description and a thumbnail concept per clip.
+- Captions use the genre's accent color (gold, cyan, yellow, white)
+  and entrance effect; override with `CAPTION_EFFECT` in `backend/.env`
+  (`auto` follows the genre).
+- Camera behavior follows the genre: zoom intensity and whether the
+  two-speaker split-screen is used.
+
+Every finished video also gets `work/<video_id>/edl.json`, an
+edit decision list per clip (timestamps, genre, render settings,
+caption files, thumbnail concept), and each clip gets a downloadable
+`.srt` subtitle file next to the burned-in captions.
+
 ## Honest limits
 
 The scorer ranks engagement signals; it cannot predict what will go

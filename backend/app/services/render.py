@@ -19,7 +19,15 @@ import glob
 import subprocess
 from pathlib import Path
 
-from app.pipeline import StageCache, Transcript, Word, words_to_ass
+from app.pipeline import (
+    StageCache,
+    Transcript,
+    Word,
+    detect_genre,
+    get_profile,
+    words_to_ass,
+    words_to_srt,
+)
 from app.pipeline.models import ClipRecord
 from app.core.config import settings, work_dir
 
@@ -117,22 +125,51 @@ def _clip_words(clip: ClipRecord, transcript: Transcript | None) -> list[Word]:
     return words
 
 
+def _resolve_effect(profile: dict) -> str:
+    """Caption effect: explicit setting wins, otherwise the genre profile."""
+    if settings.CAPTION_EFFECT != "auto":
+        return settings.CAPTION_EFFECT
+    return profile.get("caption_effect", "pop")
+
+
 def _build_ass(
     clip: ClipRecord,
     transcript: Transcript | None,
     ass_path: Path,
+    profile: dict,
 ) -> None:
     """Write karaoke ASS captions, falling back to plain subtitles."""
     words = _clip_words(clip, transcript)
     if words:
         try:
-            content = words_to_ass(words, effect=settings.CAPTION_EFFECT)
+            content = words_to_ass(
+                words,
+                effect=_resolve_effect(profile),
+                accent=profile.get("accent", "yellow"),
+            )
             ass_path.parent.mkdir(parents=True, exist_ok=True)
             ass_path.write_text(content, encoding="utf-8")
             return
         except Exception:
             pass
     _fallback_ass(clip, transcript, ass_path)
+
+
+def _build_srt(
+    clip: ClipRecord,
+    transcript: Transcript | None,
+    srt_path: Path,
+) -> bool:
+    """Write a plain SRT caption file. Returns True when words existed."""
+    words = _clip_words(clip, transcript)
+    if not words:
+        return False
+    try:
+        srt_path.parent.mkdir(parents=True, exist_ok=True)
+        srt_path.write_text(words_to_srt(words), encoding="utf-8")
+        return True
+    except Exception:
+        return False
 
 
 def _crop_filter(clip: ClipRecord, source: Path) -> str:
@@ -176,13 +213,13 @@ def _vignette_mask() -> "object":
     return mask[:, :, None].astype(np.float32)
 
 
-def _zoom(t: float, dur: float) -> float:
+def _zoom(t: float, dur: float, intensity: float = 0.07) -> float:
     """Gentle zoom pulse that tightens over the life of the clip."""
-    return 1.0 + 0.07 * (t / dur if dur > 0 else 0.0)
+    return 1.0 + intensity * (t / dur if dur > 0 else 0.0)
 
 
 def _single_crop(
-    frame: "object", track: list, t: float, dur: float
+    frame: "object", track: list, t: float, dur: float, zoom_intensity: float
 ) -> "object":
     """9:16 crop following one face track, with a zoom pulse."""
     import cv2
@@ -192,7 +229,7 @@ def _single_crop(
 
     fh, fw = frame.shape[:2]
     cx, cy, _s = _interp_track(track, t)
-    z = _zoom(t, dur)
+    z = _zoom(t, dur, zoom_intensity)
     cw = (fh * 9.0 / 16.0) / z
     ch = fh / z
     if cw > fw:
@@ -216,7 +253,7 @@ def _single_crop(
 
 
 def _split_half(
-    frame: "object", track: list, t: float, dur: float
+    frame: "object", track: list, t: float, dur: float, zoom_intensity: float
 ) -> "object":
     """One 1080x960 half of the split-screen, framing one speaker."""
     import cv2
@@ -228,7 +265,7 @@ def _split_half(
         cx, cy, s = _interp_track(track, t)
     else:
         cx, cy, s = 0.5, 0.5, 0.3
-    z = _zoom(t, dur)
+    z = _zoom(t, dur, zoom_intensity)
     side = s * fw * 5.0 / z
     side = min(max(side, fh * 0.35), fh * 0.95)
     # Box sits slightly above the face center so there is headroom below.
@@ -247,14 +284,20 @@ def _split_half(
 
 
 def _process_frame(
-    frame: "object", plan: dict, t: float, dur: float, vignette: "object"
+    frame: "object",
+    plan: dict,
+    t: float,
+    dur: float,
+    vignette: "object",
+    profile: dict,
 ) -> "object":
     """Build one finished 1080x1920 frame: reframe, vignette, progress."""
     import numpy as np
 
+    zoom_intensity = float(profile.get("zoom", 0.07))
     mode = plan.get("mode", "center")
     tracks = plan.get("tracks", [])
-    if mode == "split" and len(tracks) >= 2:
+    if mode == "split" and profile.get("allow_split", True) and len(tracks) >= 2:
         # Top half: most present speaker; bottom half: second speaker.
         # A track with too few samples reuses the other track's region
         # so a half is never left black.
@@ -262,13 +305,13 @@ def _process_frame(
         halves = []
         for idx in range(2):
             src_track = tracks[idx] if usable[idx] else tracks[1 - idx]
-            halves.append(_split_half(frame, src_track, t, dur))
+            halves.append(_split_half(frame, src_track, t, dur, zoom_intensity))
         out = np.zeros((CLIP_H, CLIP_W, 3), dtype=np.uint8)
         out[0 : CLIP_H // 2] = halves[0]
         out[CLIP_H // 2 : CLIP_H] = halves[1]
     else:
         track = tracks[0] if tracks else []
-        out = _single_crop(frame, track, t, dur)
+        out = _single_crop(frame, track, t, dur, zoom_intensity)
 
     out = np.clip(
         out.astype(np.float32) * vignette, 0, 255
@@ -288,6 +331,7 @@ def _render_advanced(
     start: float,
     dur: float,
     plan: dict,
+    profile: dict,
 ) -> None:
     """Per-frame edited render piped to ffmpeg.
 
@@ -330,7 +374,7 @@ def _render_advanced(
                 last = frame
             if last is None:
                 raise RenderError("Could not read any frame from source video")
-            out = _process_frame(last, plan, t, dur, vignette)
+            out = _process_frame(last, plan, t, dur, vignette, profile)
             try:
                 proc.stdin.write(out.tobytes())
             except BrokenPipeError:
@@ -394,13 +438,20 @@ def render_clip(video_id: str, clip: ClipRecord, work_dir: str | Path) -> ClipRe
         source = _find_source(video_dir)
         transcript = _load_transcript(video_id)
 
+        genre = clip.candidate.genre or (
+            detect_genre(transcript) if transcript else "podcast"
+        )
+        profile = get_profile(genre)
+
         captions_dir = video_dir / "captions"
         clips_dir = video_dir / "clips"
         clips_dir.mkdir(parents=True, exist_ok=True)
         ass_path = captions_dir / f"{clip.id}.ass"
+        srt_path = captions_dir / f"{clip.id}.srt"
         out_path = clips_dir / f"{clip.id}.mp4"
 
-        _build_ass(clip, transcript, ass_path)
+        _build_ass(clip, transcript, ass_path, profile)
+        srt_ok = _build_srt(clip, transcript, srt_path)
 
         start = max(0.0, clip.candidate.start)
         dur = clip.candidate.end - clip.candidate.start
@@ -425,12 +476,25 @@ def render_clip(video_id: str, clip: ClipRecord, work_dir: str | Path) -> ClipRe
 
         if plan is None:
             _render_basic(clip, source, ass_path, out_path, start, dur)
+            render_mode = "basic"
         else:
-            _render_advanced(clip, source, ass_path, out_path, start, dur, plan)
+            _render_advanced(clip, source, ass_path, out_path, start, dur, plan, profile)
+            render_mode = plan.get("mode", "track")
 
         clip.status = "done"
         clip.output_path = str(out_path)
         clip.caption_path = str(ass_path)
+        clip.srt_path = str(srt_path) if srt_ok else None
+        clip.render_info = {
+            "genre": genre,
+            "profile": profile.get("label", genre),
+            "mode": render_mode,
+            "caption_effect": _resolve_effect(profile),
+            "caption_accent": profile.get("accent", "yellow"),
+            "zoom": profile.get("zoom", 0.07),
+            "vignette": render_mode != "basic",
+            "progress_bar": render_mode != "basic",
+        }
         clip.error = None
     except Exception as exc:
         clip.status = "failed"

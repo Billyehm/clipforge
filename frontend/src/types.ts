@@ -31,6 +31,9 @@ export interface Candidate {
   title: string
   hashtags: string[]
   speaker: string | null
+  genre: string
+  description: string
+  thumbnail_concept: string
 }
 
 export interface ClipRecord {
@@ -40,6 +43,8 @@ export interface ClipRecord {
   status: string
   output_path: string | null
   caption_path: string | null
+  srt_path: string | null
+  render_info: Record<string, unknown>
   error: string | null
 }
 

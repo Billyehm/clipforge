@@ -87,3 +87,7 @@ export async function rerenderClip(
 export function downloadUrl(videoId: string, clipId: string): string {
   return `${BASE}/videos/${videoId}/download/${clipId}`
 }
+
+export function captionsUrl(videoId: string, clipId: string): string {
+  return `${BASE}/videos/${videoId}/captions/${clipId}`
+}

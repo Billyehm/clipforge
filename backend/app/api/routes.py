@@ -229,3 +229,23 @@ async def download_clip(video_id: str, clip_id: str) -> FileResponse:
         media_type="video/mp4",
         filename=f"{clip_id}.mp4",
     )
+
+
+@router.get("/videos/{video_id}/captions/{clip_id}")
+async def download_captions(video_id: str, clip_id: str) -> FileResponse:
+    """Download the SRT subtitle file for one clip."""
+    _require_video(video_id)
+    clips = _load_clip_records(video_id)
+    clip = next((c for c in clips if c.id == clip_id), None)
+    if clip is None:
+        raise HTTPException(404, f"Clip {clip_id} not found")
+    if not clip.srt_path or not Path(clip.srt_path).exists():
+        raise HTTPException(
+            409,
+            f"Clip {clip_id} has no SRT file yet (status: {clip.status}).",
+        )
+    return FileResponse(
+        clip.srt_path,
+        media_type="text/plain",
+        filename=f"{clip_id}.srt",
+    )

@@ -146,11 +146,20 @@ def _effect_tags(effect: str, dur_ms: float) -> str:
     )
 
 
+ACCENTS: dict[str, str] = {
+    "yellow": "&H0000FFFF",
+    "cyan": "&H00FFFF00",
+    "gold": "&H0037AFD4",
+    "white": "&H00FFFFFF",
+}
+
+
 def words_to_ass(
     words: list[Word],
     style: str = "karaoke",
     effect: str = "pop",
     max_words: int = 8,
+    accent: str = "yellow",
 ) -> str:
     """Build ASS subtitle content from word-level timestamps.
 
@@ -158,13 +167,19 @@ def words_to_ass(
     with the active word highlighted by a karaoke sweep. The entrance
     effect is one of "none", "pop", "bounce", "spin", or "fade"
     ("pop" by default); words shorter than 120 ms fall back to "fade"
-    for that event. Unknown styles or effects raise ValueError.
+    for that event. The accent color names the karaoke highlight:
+    "yellow", "cyan", "gold", or "white". Unknown styles, effects,
+    or accents raise ValueError.
     """
     if style != "karaoke":
         raise ValueError(f"Unknown style {style!r}. Only 'karaoke' is supported.")
     if effect not in EFFECTS:
         raise ValueError(
             f"Unknown effect {effect!r}. Choose from {', '.join(EFFECTS)}."
+        )
+    if accent not in ACCENTS:
+        raise ValueError(
+            f"Unknown accent {accent!r}. Choose from {', '.join(ACCENTS)}."
         )
     if max_words < 1:
         raise ValueError("max_words must be at least 1.")
@@ -203,7 +218,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Karaoke,Arial,{FONT_SIZE},&H00FFFFFF,&H0000FFFF,&H80000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,40,40,{MARGIN_V},1
+Style: Karaoke,Arial,{FONT_SIZE},&H00FFFFFF,{ACCENTS[accent]},&H80000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,40,40,{MARGIN_V},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -214,3 +229,42 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Karaoke,,0,0,0,,{text}"
         )
     return "\n".join(lines) + "\n"
+
+
+def _srt_time(seconds: float) -> str:
+    ms = max(0, int(round(seconds * 1000)))
+    h, rem = divmod(ms, 3600000)
+    m, rem = divmod(rem, 60000)
+    s, ms = divmod(rem, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def words_to_srt(words: list[Word]) -> str:
+    """Build an SRT subtitle file from word-level timestamps.
+
+    Words are grouped into cues of up to 42 characters or 3 seconds,
+    whichever comes first. Plain text, no styling.
+    """
+    cues: list[list[Word]] = []
+    current: list[Word] = []
+    for w in words:
+        if not w.text.strip():
+            continue
+        if current:
+            text_len = sum(len(x.text) + 1 for x in current) + len(w.text)
+            gap = w.start - current[-1].end
+            dur = w.end - current[0].start
+            if text_len > 42 or gap > 0.8 or dur > 3.0:
+                cues.append(current)
+                current = []
+        current.append(w)
+    if current:
+        cues.append(current)
+
+    lines: list[str] = []
+    for i, cue in enumerate(cues, 1):
+        start = max(0.0, cue[0].start)
+        end = max(start + 0.2, cue[-1].end)
+        text = " ".join(w.text for w in cue)
+        lines.append(f"{i}\n{_srt_time(start)} --> {_srt_time(end)}\n{text}\n")
+    return "\n".join(lines)

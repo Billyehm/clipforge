@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  captionsUrl,
   downloadUrl,
   getClips,
   getProgress,
@@ -362,6 +363,7 @@ function ClipCard({ videoId, initial }: { videoId: string; initial: ClipRecord }
           playsInline
         />
         <span className={scoreClass(c.score)}>{c.score}</span>
+        {c.genre && <span className="genre-badge">{c.genre}</span>}
       </div>
 
       <div className="card-body">
@@ -374,6 +376,12 @@ function ClipCard({ videoId, initial }: { videoId: string; initial: ClipRecord }
 
         <p className="hook">{c.hook_line}</p>
         <p className="reason muted">{c.reason}</p>
+        {c.description && <p className="muted small">{c.description}</p>}
+        {c.thumbnail_concept && (
+          <p className="muted small">
+            <strong>Thumbnail:</strong> {c.thumbnail_concept}
+          </p>
+        )}
 
         {c.speaker && <p className="muted small">Speaker: {c.speaker}</p>}
 
@@ -425,6 +433,13 @@ function ClipCard({ videoId, initial }: { videoId: string; initial: ClipRecord }
             download
           >
             Download
+          </a>
+          <a
+            className="btn ghost"
+            href={captionsUrl(videoId, clip.id)}
+            download
+          >
+            SRT
           </a>
           <button className="btn ghost" onClick={copyCaption}>
             {copied ? 'Copied' : 'Copy caption'}
